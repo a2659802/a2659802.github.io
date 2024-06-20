@@ -14,7 +14,7 @@ description: 如何排查iptables在哪个环节将包丢弃
 
 路由转发的路径通常为：prerouting->forward->postrouting
 本机程序请求外部服务通常为：output->postrouting
-外部请求本机服务通常为：prerouting->input->output->postrouting
+外部请求本机服务通常为：prerouting->input
 
 表的处理优先级：raw>mangle>nat>filter
 
