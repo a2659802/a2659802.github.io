@@ -36,7 +36,7 @@ OpenSSH 授权问题漏洞(CVE-2021-36368)
 apt install -y gcc build-essential manpages-dev make perl zlib1g zlib1g-dev libssl-dev linux-libc-dev libpam0g-dev
 ```
 3. 解压编译
-```
+```bash
 ./configure --prefix=/usr --sysconfdir=/etc/ssh --with-zlib --with-privsep-path=/run/sshd --with-pam  --with-md5-passwords
 
 make -j
@@ -63,7 +63,7 @@ autoinstall:
 ```
 4. 用`mksquashfs  "$squashfs_path" "$ubuntu_squashfs_path" -comp xz -b 1M -noappend`压缩文件系统
 5. 压缩ISO
-```
+```bash
  xorriso -as mkisofs -r \
     -V "SRHINO_AMD64" \
     -c isolinux/boot.cat \
