@@ -469,3 +469,148 @@ data blocks changed from 9020416 to 19506176
 这里尝试针对特定域名/ip进行拦截，例如镜像仓库的，用于测试某些组件安装时是否依赖了在线的镜像源。
 
 比较简单的做法是影响虚拟机的DNS设置，例如修改虚拟机的hosts文件，将需要屏蔽的域名解析到127.0.0.1上
+
+## 快速克隆脚本
+
+```bash
+#!/bin/bash
+# 脚本名称：quick_clone
+# 功能：快速克隆KVM虚拟机并自动配置网络
+# 用法：./quick_clone <新虚拟机名称> <内存大小> [IP地址]
+# 其中名字为vmXXYYY时，可以会根据XXYYY自动设置IP
+
+# 检查参数
+if [ $# -lt 2 ]; then
+  echo "Usage: $0 <vm_name> <memory_size> [ip_address]"
+  exit 1
+fi
+
+TEMPLATE_VM="vm_kylinv10"       # 模板虚拟机名称
+POOL_NAME="local1"              # 存储池名称
+IMAGE_DIR="/home/kvm/images"    # 镜像目录
+TEMPLATE_IP="172.16.88.244"     # 模板虚拟机IP
+NEW_VM="$1"
+MEMORY="$2"
+
+if [ -z "$3" ]; then
+  # 从名称中提取最后两部分数字（例如 vm89142 -> 89.142）
+  IP_SUFFIX=$(echo "$NEW_VM" | grep -oP '\d{2}\d{3}$' | sed 's/\(..\)\(...\)/\1.\2/')
+  
+  # 检查是否成功提取
+  if [ -z "$IP_SUFFIX" ]; then
+    echo "Error: Unable to extract IP suffix from VM name. Please provide IP address manually."
+    exit 1
+  fi
+
+  # 拼接完整的 IP 地址
+  NEW_IP="172.16.$IP_SUFFIX"
+else
+  NEW_IP="$3"
+fi
+
+# 1. 克隆虚拟机
+virt-clone -o "$TEMPLATE_VM" -n "$NEW_VM" -f "$IMAGE_DIR/$NEW_VM.img"
+
+# 2. 启动新虚拟机
+virsh start "$NEW_VM"
+
+# 3. 调整虚拟机配置
+virsh setmem "$NEW_VM" "$MEMORY" --live
+
+
+# 4. 等待虚拟机启动
+echo "Waiting for VM to start and SSH service to be available..."
+MAX_RETRIES=10  # 最大重试次数
+RETRY_INTERVAL=10  # 每次重试间隔（秒）
+
+for i in $(seq 1 $MAX_RETRIES); do
+  echo "Attempt $i: Trying to connect to $TEMPLATE_IP..."
+  if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@$TEMPLATE_IP true; then
+    echo "SSH connection successful!"
+    break
+  else
+    echo "SSH connection failed. Retrying in $RETRY_INTERVAL seconds..."
+    sleep $RETRY_INTERVAL
+  fi
+
+  if [ $i -eq $MAX_RETRIES ]; then
+    echo "Error: Failed to connect to VM after $MAX_RETRIES attempts. Exiting."
+    exit 1
+  fi
+done
+
+# 5. 修改网络配置（通过SSH）
+
+TEMP_SCRIPT=$(mktemp)  # 创建临时脚本文件
+cat > "$TEMP_SCRIPT" <<EOF
+#!/bin/bash
+# 修改网络配置
+sed -i "s/IPADDR=.*/IPADDR=$NEW_IP/" /etc/sysconfig/network-scripts/ifcfg-enp3s0
+ifdown enp3s0 && systemctl restart NetworkManager
+EOF
+
+scp -o StrictHostKeyChecking=no "$TEMP_SCRIPT" root@$TEMPLATE_IP:/tmp/configure_network.sh
+ssh -o StrictHostKeyChecking=no root@$TEMPLATE_IP chmod +x /tmp/configure_network.sh
+ssh -o StrictHostKeyChecking=no root@$TEMPLATE_IP /tmp/configure_network.sh &
+
+# 8. 清理本地临时脚本
+rm -f "$TEMP_SCRIPT"
+
+# 6. 验证新IP
+echo "New VM $NEW_VM configured with IP: $NEW_IP"
+echo "Try to connect: ssh root@$NEW_IP"
+ping -c 3 $NEW_IP
+```
+
+## 快速删除脚本
+```bash
+#!/bin/bash
+if [ $# -lt 1 ]; then
+  echo "Usage: $0 <vm_name>"
+  exit 1
+fi
+VM_NAME="$1"
+
+rm -f /var/lib/libvirt/qemu/nvram/${VM_NAME}_VARS.fd
+virsh undefine ${VM_NAME}
+virsh vol-delete --pool local1 ${VM_NAME}.img 
+```
+
+## 网卡流量镜像
+
+假如需要将宿主机的某个网卡入口流量镜像到某个虚拟机的网卡上，可以通过下面步骤实现
+
+确认宿主机上的目标网卡, 这里是`vnet7`
+
+```bash
+[root@localhost ~]# virsh domiflist vm89146
+ 接口    类型      源        型号     MAC
+---------------------------------------------------------
+ vnet6   bridge    br1       virtio   52:54:00:f0:xx:xx
+ vnet7   network   default   virtio   52:54:00:25:xx:xx
+```
+
+确认源网卡，可以用tcpdump之类的方式确认，这里是`enp125s0f3`
+
+使用`tc`命令实现流量镜像
+
+```bash
+# 加载内核模块
+modprobe sch_ingress
+modprobe act_mirred
+
+# 在源网卡创建ingress规则
+tc qdisc add dev enp125s0f3 handle ffff: ingress
+# 添加镜像规则
+tc filter add dev enp125s0f3 parent ffff: protocol all u32 match u32 0 0 action mirred egress mirror dev vnet7
+# 检查规则
+tc filter show dev enp125s0f3 parent ffff:
+```
+
+注意宿主机网卡要工作在混杂模式，否则很多流量镜像不过去
+`ip link set enp125s0f3 promisc on`
+
+不需要之后，可以清理规则
+```bash
+tc qdisc del dev enp125s0f3 ingress
+```
