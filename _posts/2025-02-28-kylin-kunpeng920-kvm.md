@@ -614,3 +614,28 @@ tc filter show dev enp125s0f3 parent ffff:
 ```bash
 tc qdisc del dev enp125s0f3 ingress
 ```
+
+## 环境重建
+
+### 使用img文件创建虚拟机
+
+这里直接使用--import导入保存的img文件, 虽然没有纳入存储池的管理，但能正常运行
+
+```bash
+virt-install \
+    --name=vm_kylinv10 \
+    --vcpus=8 --ram=8192 \
+    --disk path=/home/kvm/images/kylinv10.img,format=qcow2,bus=virtio \
+    --import \
+    --network bridge=br1,model=virtio \
+    --noautoconsole
+```
+
+### 修正网络配置
+
+上一步导入后会自动开机，进去后发现虚拟机内部的网卡名称发生变化，原来的配置需要调整
+
+1. 修改`/etc/sysconfig/network-scripts/ifcfg-enp3s0`的名字为新的网卡名，例如`/etc/sysconfig/network-scripts/ifcfg-enp1s0`
+2. 编辑`ifcfg-enp1s0`文件，调整`NAME`字段和`DEVICE`字段
+3. 根据需要调整IP地址、掩码、网关等
+4. 执行`nmcli con reload` 和 `nmcli con up enp1s0`应用配置
