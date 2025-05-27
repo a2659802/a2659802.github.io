@@ -486,15 +486,17 @@ if [ $# -lt 2 ]; then
 fi
 
 TEMPLATE_VM="vm_kylinv10"       # 模板虚拟机名称
-POOL_NAME="local1"              # 存储池名称
+IFACE_NAME="enp1s0"
 IMAGE_DIR="/home/kvm/images"    # 镜像目录
-TEMPLATE_IP="172.16.88.244"     # 模板虚拟机IP
+TEMPLATE_IP="172.16.89.0"     # 模板虚拟机IP
 NEW_VM="$1"
 MEMORY="$2"
 
 if [ -z "$3" ]; then
   # 从名称中提取最后两部分数字（例如 vm89142 -> 89.142）
-  IP_SUFFIX=$(echo "$NEW_VM" | grep -oP '\d{2}\d{3}$' | sed 's/\(..\)\(...\)/\1.\2/')
+  #IP_SUFFIX=$(echo "$NEW_VM" | grep -oP '\d{2}\d{3}$' | sed 's/\(..\)\(...\)/\1.\2/')
+  # 改为个位数的vm895->89.5
+  IP_SUFFIX=$(echo "$NEW_VM" | grep -oP '\d{2}\d{1}$' | sed 's/\(..\)\(.\)/\1.\2/')
   
   # 检查是否成功提取
   if [ -z "$IP_SUFFIX" ]; then
@@ -545,8 +547,8 @@ TEMP_SCRIPT=$(mktemp)  # 创建临时脚本文件
 cat > "$TEMP_SCRIPT" <<EOF
 #!/bin/bash
 # 修改网络配置
-sed -i "s/IPADDR=.*/IPADDR=$NEW_IP/" /etc/sysconfig/network-scripts/ifcfg-enp3s0
-ifdown enp3s0 && systemctl restart NetworkManager
+sed -i "s/IPADDR=.*/IPADDR=$NEW_IP/" /etc/sysconfig/network-scripts/ifcfg-$IFACE_NAME
+ifdown $IFACE_NAME && systemctl restart NetworkManager
 EOF
 
 scp -o StrictHostKeyChecking=no "$TEMP_SCRIPT" root@$TEMPLATE_IP:/tmp/configure_network.sh
@@ -565,15 +567,18 @@ ping -c 3 $NEW_IP
 ## 快速删除脚本
 ```bash
 #!/bin/bash
+POOL_NAME="local1"              # 存储池名称
+
 if [ $# -lt 1 ]; then
   echo "Usage: $0 <vm_name>"
+  echo "Warn: should shutdown vm manually before remove"
   exit 1
 fi
 VM_NAME="$1"
 
 rm -f /var/lib/libvirt/qemu/nvram/${VM_NAME}_VARS.fd
 virsh undefine ${VM_NAME}
-virsh vol-delete --pool local1 ${VM_NAME}.img 
+virsh vol-delete --pool ${POOL_NAME} ${VM_NAME}.img 
 ```
 
 ## 网卡流量镜像
@@ -619,7 +624,7 @@ tc qdisc del dev enp125s0f3 ingress
 
 ### 使用img文件创建虚拟机
 
-这里直接使用--import导入保存的img文件, 虽然没有纳入存储池的管理，但能正常运行
+这里直接使用--import导入保存的img文件
 
 ```bash
 virt-install \
