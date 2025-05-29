@@ -481,7 +481,7 @@ data blocks changed from 9020416 to 19506176
 
 # 检查参数
 if [ $# -lt 2 ]; then
-  echo "Usage: $0 <vm_name> <memory_size> [ip_address]"
+  echo "Usage: $0 <vm_name> <memory_size> [ip_address] [disk_resize] [cpu_max]"
   exit 1
 fi
 
@@ -491,8 +491,11 @@ IMAGE_DIR="/home/kvm/images"    # 镜像目录
 TEMPLATE_IP="172.16.89.0"     # 模板虚拟机IP
 NEW_VM="$1"
 MEMORY="$2"
+TARGET_IP="$3"
+DISK_RESIZE="$4"
+CPU_MAX="$5"
 
-if [ -z "$3" ]; then
+if [ -z "$TARGET_IP" ]; then
   # 从名称中提取最后两部分数字（例如 vm89142 -> 89.142）
   #IP_SUFFIX=$(echo "$NEW_VM" | grep -oP '\d{2}\d{3}$' | sed 's/\(..\)\(...\)/\1.\2/')
   # 改为个位数的vm895->89.5
@@ -507,18 +510,30 @@ if [ -z "$3" ]; then
   # 拼接完整的 IP 地址
   NEW_IP="172.16.$IP_SUFFIX"
 else
-  NEW_IP="$3"
+  NEW_IP="$TARGET_IP"
 fi
 
 # 1. 克隆虚拟机
 virt-clone -o "$TEMPLATE_VM" -n "$NEW_VM" -f "$IMAGE_DIR/$NEW_VM.img"
 
+# 3. 调整虚拟机配置
+if [ -n "$CPU_MAX" ]; then
+  virsh setvcpus "$NEW_VM" $CPU_MAX --config --maximum
+fi
+virsh setmaxmem "$NEW_VM" "$MEMORY" --config
+
 # 2. 启动新虚拟机
 virsh start "$NEW_VM"
 
-# 3. 调整虚拟机配置
 virsh setmem "$NEW_VM" "$MEMORY" --live
+if [ -n "$CPU_MAX" ]; then
+  virsh setvcpus "$NEW_VM" $CPU_MAX --live
+fi
 
+# 3. 可选：调整虚拟机磁盘大小
+if [ -n "$DISK_RESIZE" ]; then
+  virsh blockresize "$NEW_VM" "$IMAGE_DIR/$NEW_VM.img" "$DISK_RESIZE"
+fi
 
 # 4. 等待虚拟机启动
 echo "Waiting for VM to start and SSH service to be available..."
@@ -549,7 +564,20 @@ cat > "$TEMP_SCRIPT" <<EOF
 # 修改网络配置
 sed -i "s/IPADDR=.*/IPADDR=$NEW_IP/" /etc/sysconfig/network-scripts/ifcfg-$IFACE_NAME
 ifdown $IFACE_NAME && systemctl restart NetworkManager
+hostnamectl set-hostname $NEW_VM
 EOF
+
+if [ -n "$DISK_RESIZE" ]; then
+  cat >> "$TEMP_SCRIPT" <<EOF
+df -h
+growpart /dev/vda 3
+pvresize /dev/vda3
+vgdisplay klas_kylin-kvm
+lvextend -l +100%FREE /dev/klas_kylin-kvm/root
+xfs_growfs /
+df -h
+EOF
+fi
 
 scp -o StrictHostKeyChecking=no "$TEMP_SCRIPT" root@$TEMPLATE_IP:/tmp/configure_network.sh
 ssh -o StrictHostKeyChecking=no root@$TEMPLATE_IP chmod +x /tmp/configure_network.sh
@@ -621,6 +649,9 @@ tc qdisc del dev enp125s0f3 ingress
 ```
 
 ## 环境重建
+
+### 虚拟化搭建
+按照之前的步骤，把虚拟化平台搭好，网桥之类的配好，存储池起相同的名字
 
 ### 使用img文件创建虚拟机
 
